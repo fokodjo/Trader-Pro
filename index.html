@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>TRADER PRO</title>
-
 <!-- PWA -->
 <meta name="application-name" content="TRADER PRO">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -12,10 +11,24 @@
 <meta name="apple-mobile-web-app-title" content="TRADER PRO">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#07080d">
-<meta name="description" content="Journal de Trading Professionnel — TRADER PRO">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link rel="icon" type="image/png" href="icon-192.png">
+<!-- Firebase SDK (compat version - works without npm) -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script>
+var firebaseConfig = {
+  apiKey: "AIzaSyBU-fhhqLdnE7n0IVsYxPEBCyVlGA0YTGk",
+  authDomain: "trader-pro-9c8c3.firebaseapp.com",
+  projectId: "trader-pro-9c8c3",
+  storageBucket: "trader-pro-9c8c3.firebasestorage.app",
+  messagingSenderId: "830414311247",
+  appId: "1:830414311247:web:ee5ac728bf7c169d9dbf3a"
+};
+firebase.initializeApp(firebaseConfig);
+var db = firebase.firestore();
+console.log("Firebase connecté ✅");
+</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{min-height:100%;font-family:Georgia,serif;background:#07080d;color:#dde0f0;font-size:14px;}
@@ -788,33 +801,27 @@ var UTS = {structure:'', trendline:'', figure:''};
 var TF = ['M1','M5','M15','M30','H1','H4','D1','W1','MN'];
 
 // ═══════════ STORAGE ═══════════
-// ─── STORAGE : chaque utilisateur a ses données isolées ───
+// ═══════════════════════════════════════════════
+// STORAGE — Firebase pour licences + localStorage pour données perso
+// ═══════════════════════════════════════════════
+
 function lsGet(k, def) {
   try { var v = localStorage.getItem(k); return v !== null ? v : def; } catch(e) { return def; }
 }
-function lsSet(k, v) {
-  try { localStorage.setItem(k, v); } catch(e) {}
-}
-function lsDel(k) {
-  try { localStorage.removeItem(k); } catch(e) {}
-}
-
-// Clé personnalisée par utilisateur → données totalement isolées
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch(e) {} }
+function lsDel(k) { try { localStorage.removeItem(k); } catch(e) {} }
 function uk(suffix) {
   var u = CUR_USER ? CUR_USER.user : '';
   return 'tp_' + suffix + '_' + u;
 }
 
+// ── LICENCES FIREBASE (partagées en ligne) ──
 function loadAll() {
-  // Les licences sont GLOBALES (partagées entre tous sur cet appareil)
-  try { LICENSES = JSON.parse(lsGet('tp_lics', '[]')); } catch(e) { LICENSES = []; }
-  if (!LICENSES.find(function(l){ return l.user === 'Admin'; })) {
-    LICENSES.push({user:'Admin', key:'1234', admin:true});
-    lsSet('tp_lics', JSON.stringify(LICENSES));
-  }
+  // Les données perso restent en local (trades, actifs, capital)
+  // Les licences viennent de Firebase
+  LICENSES = []; // sera rempli par Firebase
 }
 
-// Charge les données propres à l'utilisateur connecté
 function loadUserData() {
   try { TRADES = JSON.parse(lsGet(uk('trades'), '[]')); } catch(e) { TRADES = []; }
   try { ACTIFS = JSON.parse(lsGet(uk('actifs'), '[]')); } catch(e) { ACTIFS = []; }
@@ -823,7 +830,44 @@ function loadUserData() {
 
 function saveT() { lsSet(uk('trades'), JSON.stringify(TRADES)); }
 function saveA() { lsSet(uk('actifs'), JSON.stringify(ACTIFS)); }
-function saveL() { lsSet('tp_lics', JSON.stringify(LICENSES)); }
+
+// Sauvegarde licence dans Firebase
+function saveL() {
+  // Sauvegarde chaque licence dans Firestore
+  for (var i = 0; i < LICENSES.length; i++) {
+    var lic = LICENSES[i];
+    db.collection('licenses').doc(lic.user).set({
+      user: lic.user,
+      key: lic.key,
+      admin: lic.admin || false
+    }).catch(function(e){ console.log('Erreur saveL:', e); });
+  }
+}
+
+// Charge les licences depuis Firebase
+function loadLicensesFromFirebase(callback) {
+  db.collection('licenses').get().then(function(snap) {
+    LICENSES = [];
+    snap.forEach(function(doc) {
+      LICENSES.push(doc.data());
+    });
+    // Si aucune licence, créer Admin par défaut
+    if (LICENSES.length === 0) {
+      var adminLic = {user:'Admin', key:'1234', admin:true};
+      LICENSES.push(adminLic);
+      db.collection('licenses').doc('Admin').set(adminLic);
+    }
+    if (callback) callback();
+  }).catch(function(e) {
+    console.log('Firebase erreur, mode hors-ligne:', e);
+    // Mode hors-ligne : utiliser licences en cache local
+    try { LICENSES = JSON.parse(lsGet('tp_lics_cache', '[]')); } catch(err) { LICENSES = []; }
+    if (LICENSES.length === 0) {
+      LICENSES = [{user:'Admin', key:'1234', admin:true}];
+    }
+    if (callback) callback();
+  });
+}
 function gid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 
 // ═══════════ EXPORT / IMPORT ═══════════
@@ -865,16 +909,51 @@ function doLogin() {
   var user = document.getElementById('l-user').value.trim();
   var pwd = document.getElementById('l-pwd').value.trim();
   var err = document.getElementById('lerr');
+  var btn = document.querySelector('.lbtn');
   err.style.display = 'none';
   if (!user || !pwd) { err.textContent = 'Veuillez remplir tous les champs.'; err.style.display = 'block'; return; }
   if (!/^\d{4}$/.test(pwd)) { err.textContent = 'Le mot de passe doit être 4 chiffres.'; err.style.display = 'block'; return; }
-  var lic = null;
-  for (var i = 0; i < LICENSES.length; i++) {
-    if (LICENSES[i].user.toLowerCase() === user.toLowerCase() && LICENSES[i].key === pwd) { lic = LICENSES[i]; break; }
-  }
-  if (!lic) { err.textContent = 'Identifiants incorrects. Veuillez réessayer.'; err.style.display = 'block'; return; }
-  lsSet('tp_sess', JSON.stringify({user:lic.user, ts:Date.now()}));
-  startApp(lic); // startApp sets CUR_USER and loads user data
+  // Afficher chargement
+  if (btn) btn.textContent = 'Connexion...';
+  // Chercher dans Firebase
+  db.collection('licenses').doc(user).get().then(function(doc) {
+    if (btn) btn.textContent = 'Accéder à mon journal';
+    if (doc.exists) {
+      var lic = doc.data();
+      if (lic.key === pwd) {
+        lsSet('tp_sess', JSON.stringify({user:lic.user, ts:Date.now()}));
+        // Mettre en cache pour mode hors-ligne
+        var cached = JSON.parse(lsGet('tp_lics_cache','[]'));
+        var found = false;
+        for (var i=0;i<cached.length;i++){if(cached[i].user===lic.user){cached[i]=lic;found=true;break;}}
+        if(!found) cached.push(lic);
+        lsSet('tp_lics_cache', JSON.stringify(cached));
+        startApp(lic);
+      } else {
+        err.textContent = 'Mot de passe incorrect.';
+        err.style.display = 'block';
+      }
+    } else {
+      err.textContent = 'Utilisateur introuvable. Vérifiez votre nom.';
+      err.style.display = 'block';
+    }
+  }).catch(function(e) {
+    if (btn) btn.textContent = 'Accéder à mon journal';
+    // Mode hors-ligne : vérifier le cache local
+    console.log('Hors-ligne, vérification cache:', e);
+    var cached = JSON.parse(lsGet('tp_lics_cache','[]'));
+    var lic = null;
+    for (var i=0;i<cached.length;i++){
+      if(cached[i].user.toLowerCase()===user.toLowerCase()&&cached[i].key===pwd){lic=cached[i];break;}
+    }
+    if (lic) {
+      lsSet('tp_sess', JSON.stringify({user:lic.user, ts:Date.now()}));
+      startApp(lic);
+    } else {
+      err.textContent = 'Hors-ligne et identifiants non trouvés en cache. Connectez-vous une fois avec internet.';
+      err.style.display = 'block';
+    }
+  });
 }
 
 function doLogout() {
@@ -891,11 +970,34 @@ function checkSession() {
   try {
     var s = JSON.parse(lsGet('tp_sess', 'null'));
     if (!s) return false;
-    for (var i = 0; i < LICENSES.length; i++) {
-      if (LICENSES[i].user === s.user) { CUR_USER = LICENSES[i]; startApp(LICENSES[i]); return true; }
-    }
-  } catch(e) {}
-  return false;
+    // Vérifier dans Firebase d'abord
+    db.collection('licenses').doc(s.user).get().then(function(doc) {
+      if (doc.exists) {
+        var lic = doc.data();
+        startApp(lic);
+      } else {
+        // Essayer le cache local
+        var cached = JSON.parse(lsGet('tp_lics_cache','[]'));
+        for (var i=0;i<cached.length;i++){
+          if(cached[i].user===s.user){startApp(cached[i]);return;}
+        }
+        // Session invalide
+        lsDel('tp_sess');
+        document.getElementById('pg-login').className = 'page show';
+      }
+    }).catch(function(e) {
+      // Hors-ligne : utiliser cache
+      var cached = JSON.parse(lsGet('tp_lics_cache','[]'));
+      for (var i=0;i<cached.length;i++){
+        if(cached[i].user===s.user){startApp(cached[i]);return;}
+      }
+      lsDel('tp_sess');
+      document.getElementById('pg-login').className = 'page show';
+    });
+    return true; // on attend Firebase, login sera affiché si échec
+  } catch(e) {
+    return false;
+  }
 }
 
 function startApp(lic) {
@@ -948,8 +1050,14 @@ function doChangePwd() {
   var lic = null;
   for (var i = 0; i < LICENSES.length; i++) { if (LICENSES[i].user === CUR_USER.user) { lic = LICENSES[i]; break; } }
   if (!lic || lic.key !== old) { err.textContent='Mot de passe actuel incorrect.'; err.style.display='block'; return; }
-  lic.key = nw; CUR_USER.key = nw; saveL();
-  closePwd(); showToast('✅ Mot de passe modifié !');
+  lic.key = nw; CUR_USER.key = nw;
+  db.collection('licenses').doc(CUR_USER.user).update({key: nw}).then(function(){
+    // Mettre à jour cache local
+    var cached = JSON.parse(lsGet('tp_lics_cache','[]'));
+    for(var ci=0;ci<cached.length;ci++){if(cached[ci].user===CUR_USER.user){cached[ci].key=nw;break;}}
+    lsSet('tp_lics_cache',JSON.stringify(cached));
+    closePwd(); showToast('✅ Mot de passe modifié !');
+  }).catch(function(e){showToast('❌ Erreur: '+e.message);});
 }
 
 // ═══════════ TABS ═══════════
@@ -1034,30 +1142,48 @@ function addLicense() {
   var k = document.getElementById('pl-key').value.trim();
   if (!u||!k) { showToast('⚠️ Nom et clé requis.'); return; }
   if (!/^\d{4}$/.test(k)) { showToast('⚠️ Clé doit être 4 chiffres.'); return; }
-  for (var i=0;i<LICENSES.length;i++) { if (LICENSES[i].user.toLowerCase()===u.toLowerCase()) { showToast('⚠️ Utilisateur déjà existant.'); return; } }
-  LICENSES.push({user:u, key:k, admin:false}); saveL();
-  document.getElementById('pl-user').value=''; document.getElementById('pl-key').value='';
-  renderLicList(); showToast('✅ Licence créée pour '+u);
+  var newLic = {user:u, key:k, admin:false};
+  // Sauvegarder dans Firebase
+  db.collection('licenses').doc(u).set(newLic).then(function() {
+    // Aussi mettre à jour la liste locale
+    var found = false;
+    for(var i=0;i<LICENSES.length;i++){if(LICENSES[i].user===u){LICENSES[i]=newLic;found=true;break;}}
+    if(!found) LICENSES.push(newLic);
+    document.getElementById('pl-user').value=''; document.getElementById('pl-key').value='';
+    renderLicList(); showToast('✅ Licence créée pour '+u+' !');
+  }).catch(function(e) {
+    showToast('❌ Erreur Firebase: '+e.message);
+  });
 }
 function removeLicense(u) {
   if (!CUR_USER||!CUR_USER.admin) { showToast('⛔ Réservé à l\'administrateur.'); return; }
   if (u==='Admin'||u===CUR_USER.user) { showToast('⚠️ Impossible de supprimer ce compte.'); return; }
   if (!confirm('Supprimer la licence de '+u+' ?')) return;
-  LICENSES = LICENSES.filter(function(l){ return l.user!==u; });
-  saveL(); renderLicList(); showToast('🗑️ Licence supprimée.');
+  db.collection('licenses').doc(u).delete().then(function() {
+    LICENSES = LICENSES.filter(function(l){ return l.user!==u; });
+    renderLicList(); showToast('🗑️ Licence de '+u+' supprimée.');
+  }).catch(function(e){showToast('❌ Erreur: '+e.message);});
 }
 function renderLicList() {
   var c = document.getElementById('licList'); if (!c) return;
-  var html = '';
-  for (var i=0;i<LICENSES.length;i++) {
-    var l=LICENSES[i];
-    html += '<div class="pitem"><div><div class="piname">👤 '+esc(l.user)+'</div>';
-    html += '<div class="picat">'+(l.admin?'Administrateur':'Utilisateur')+' · ••••</div></div>';
-    if (l.user!=='Admin'&&l.user!==CUR_USER.user) html += '<button class="bdel" onclick="removeLicense(\''+esc(l.user)+'\')">🗑️</button>';
-    else html += '<span style="font-size:11px;color:#3f4358">Actif</span>';
-    html += '</div>';
-  }
-  c.innerHTML = html;
+  c.innerHTML = '<div style="font-size:12px;color:#3f4358;padding:8px 0">Chargement...</div>';
+  db.collection('licenses').get().then(function(snap) {
+    LICENSES = [];
+    snap.forEach(function(doc){ LICENSES.push(doc.data()); });
+    var html = '';
+    for (var i=0;i<LICENSES.length;i++) {
+      var l=LICENSES[i];
+      html += '<div class="pitem"><div><div class="piname">👤 '+esc(l.user)+'</div>';
+      html += '<div class="picat">'+(l.admin?'Administrateur':'Utilisateur')+' · ••••</div></div>';
+      if (l.user!=='Admin'&&l.user!==CUR_USER.user) html += '<button class="bdel" onclick="removeLicense(\''+esc(l.user)+'\')">🗑️</button>';
+      else html += '<span style="font-size:11px;color:#3f4358">Actif</span>';
+      html += '</div>';
+    }
+    if (!html) html = '<div style="font-size:12px;color:#3f4358;padding:8px 0">Aucune licence.</div>';
+    c.innerHTML = html;
+  }).catch(function(e){
+    c.innerHTML = '<div style="font-size:12px;color:#e04535">Erreur chargement licences.</div>';
+  });
 }
 
 // ═══════════ CAPITAL ═══════════
@@ -1454,18 +1580,17 @@ function showToast(msg){
 // ═══════════ INIT ═══════════
 loadAll();
 initChips();
-if (!checkSession()) {
+// Vérifier session via Firebase
+var _sess = null;
+try { _sess = JSON.parse(lsGet('tp_sess','null')); } catch(e){}
+if (_sess && _sess.user) {
+  checkSession(); // Firebase vérifie et appelle startApp
+} else {
   document.getElementById('pg-login').className = 'page show';
 }
-// ── Service Worker (PWA offline) ──
+// Enregistrer SW pour PWA
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('sw.js').then(function(reg) {
-      console.log('SW enregistré:', reg.scope);
-    }).catch(function(err) {
-      console.log('SW erreur:', err);
-    });
-  });
+  navigator.serviceWorker.register('sw.js').catch(function(){});
 }
 </script>
 </body>
