@@ -863,31 +863,61 @@ function importData() {
 }
 
 // ═══════════ AUTH ═══════════
-function doLogin() {
-  var user = document.getElementById('l-user').value.trim();
-  var pwd  = document.getElementById('l-pwd').value.trim();
-  var err  = document.getElementById('lerr');
+// 🔐 LOGIN AVEC LICENSES.JSON (VERSION PRO SIMPLE)
+async function doLogin() {
+
+  const userInput = document.getElementById('l-user');
+  const pwdInput  = document.getElementById('l-pwd');
+  const err       = document.getElementById('lerr');
+
+  const user = userInput.value.trim();
+  const pwd  = pwdInput.value.trim();
+
   err.style.display = 'none';
+
+  // Vérification des champs
   if (!user || !pwd) {
-    err.textContent = 'Veuillez remplir tous les champs.';
-    err.style.display = 'block'; return;
+    err.textContent = "Veuillez remplir tous les champs";
+    err.style.display = "block";
+    return;
   }
-  if (!/^\d{4}$/.test(pwd)) {
-    err.textContent = 'Le mot de passe doit contenir 4 chiffres.';
-    err.style.display = 'block'; return;
-  }
-  var lic = null;
-  for (var i = 0; i < LICENSES.length; i++) {
-    if (LICENSES[i].user.toLowerCase() === user.toLowerCase() && LICENSES[i].key === pwd) {
-      lic = LICENSES[i]; break;
+
+  try {
+
+    // Charger les licences depuis GitHub
+    const response = await fetch("licenses.json?v=" + Date.now());
+    const licenses = await response.json();
+
+    // Chercher utilisateur
+    const license = licenses.find(l =>
+      l.user.toLowerCase() === user.toLowerCase()
+    );
+
+    if (!license) {
+      throw new Error("Utilisateur introuvable");
     }
+
+    if (!license.active) {
+      throw new Error("Licence désactivée");
+    }
+
+    if (license.password !== pwd) {
+      throw new Error("Mot de passe incorrect");
+    }
+
+    // Connexion OK
+    CUR_USER = license;
+
+    // Sauvegarde locale (optionnel)
+    localStorage.setItem("user", JSON.stringify(license));
+
+    // Lancer l'app
+    startApp(license);
+
+  } catch (error) {
+    err.textContent = error.message;
+    err.style.display = "block";
   }
-  if (!lic) {
-    err.textContent = 'Identifiants incorrects. Vérifiez votre nom et mot de passe.';
-    err.style.display = 'block'; return;
-  }
-  lsSet('tp_sess', JSON.stringify({user: lic.user, ts: Date.now()}));
-  startApp(lic);
 }
 
 function doLogout() {
