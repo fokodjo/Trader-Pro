@@ -1,12 +1,7 @@
-// TRADER PRO — Service Worker v1
-const CACHE = 'traderpro-v1';
-const FILES = [
-  './',
-  './index.html',
-  './manifest.json'
-];
+// TRADER PRO — Service Worker v3 (force refresh)
+var CACHE = 'traderpro-v3';
+var FILES = ['./', './index.html', './manifest.json', './licences.json'];
 
-// Installation — mise en cache des fichiers
 self.addEventListener('install', function(e) {
   e.waitUntil(
     caches.open(CACHE).then(function(cache) {
@@ -16,7 +11,6 @@ self.addEventListener('install', function(e) {
   self.skipWaiting();
 });
 
-// Activation — nettoyage des anciens caches
 self.addEventListener('activate', function(e) {
   e.waitUntil(
     caches.keys().then(function(keys) {
@@ -29,24 +23,25 @@ self.addEventListener('activate', function(e) {
   self.clients.claim();
 });
 
-// Fetch — servir depuis le cache (fonctionne hors ligne)
 self.addEventListener('fetch', function(e) {
+  // licences.json : toujours depuis le réseau (jamais depuis le cache)
+  if (e.request.url.indexOf('licences.json') !== -1) {
+    e.respondWith(fetch(e.request).catch(function() {
+      return caches.match('./licences.json');
+    }));
+    return;
+  }
+  // Autres fichiers : cache d'abord
   e.respondWith(
     caches.match(e.request).then(function(cached) {
       if (cached) return cached;
-      return fetch(e.request).then(function(response) {
-        // Mettre en cache les nouvelles ressources
-        if (response && response.status === 200) {
-          var copy = response.clone();
-          caches.open(CACHE).then(function(cache) {
-            cache.put(e.request, copy);
-          });
+      return fetch(e.request).then(function(resp) {
+        if (resp && resp.status === 200) {
+          var copy = resp.clone();
+          caches.open(CACHE).then(function(cache) { cache.put(e.request, copy); });
         }
-        return response;
-      }).catch(function() {
-        // Hors ligne et pas en cache : retourner index.html
-        return caches.match('./index.html');
-      });
+        return resp;
+      }).catch(function() { return caches.match('./index.html'); });
     })
   );
 });

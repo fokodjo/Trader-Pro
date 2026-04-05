@@ -791,8 +791,8 @@ var TF = ['M1','M5','M15','M30','H1','H4','D1','W1','MN'];
 // Pour ajouter un client, modifier cette liste
 // ════════════════════════════════════════════════
 var MASTER_LICENSES = [
-  {user:'Admin',  key:'9891', admin:true},
-  {user:'Romeo',  key:'4321', admin:false}
+  {"user":"Admin","key":"9891","admin":true},
+  {"user":"Romeo","key":"4321","admin":false}
 ];
 
 // ════════════════════════════════════════════════
@@ -810,8 +810,18 @@ function uk(suffix) {
 }
 
 function loadAll() {
-  // Charger licences depuis MASTER_LICENSES (intégrées dans le code)
   LICENSES = MASTER_LICENSES.slice();
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', 'licences.json?t=' + Date.now(), true);
+  xhr.onload = function() {
+    if (xhr.status === 200) {
+      try {
+        var d = JSON.parse(xhr.responseText);
+        if (Array.isArray(d) && d.length > 0) { LICENSES = d; }
+      } catch(e) {}
+    }
+  };
+  xhr.send();
 }
 
 function loadUserData() {
@@ -863,63 +873,61 @@ function importData() {
 }
 
 // ═══════════ AUTH ═══════════
-// 🔐 LOGIN AVEC LICENSES.JSON (VERSION PRO SIMPLE)
-async function doLogin() {
-
-  const userInput = document.getElementById('l-user');
-  const pwdInput  = document.getElementById('l-pwd');
-  const err       = document.getElementById('lerr');
-
-  const user = userInput.value.trim();
-  const pwd  = pwdInput.value.trim();
-
-  err.style.display = 'none';
-
-  // Vérification des champs
-  if (!user || !pwd) {
-    err.textContent = "Veuillez remplir tous les champs";
-    err.style.display = "block";
-    return;
+function findLic(user, pwd) {
+  for (var i = 0; i < LICENSES.length; i++) {
+    var l = LICENSES[i];
+    if (l.user.toLowerCase() === user.toLowerCase() && l.key === pwd) return l;
   }
-
-  try {
-
-    // Charger les licences depuis GitHub
-    const response = await fetch("licenses.json?v=" + Date.now());
-    const licenses = await response.json();
-
-    // Chercher utilisateur
-    const license = licenses.find(l =>
-      l.user.toLowerCase() === user.toLowerCase()
-    );
-
-    if (!license) {
-      throw new Error("Utilisateur introuvable");
-    }
-
-    if (!license.active) {
-      throw new Error("Licence désactivée");
-    }
-
-    if (license.password !== pwd) {
-      throw new Error("Mot de passe incorrect");
-    }
-
-    // Connexion OK
-    CUR_USER = license;
-
-    // Sauvegarde locale (optionnel)
-    localStorage.setItem("user", JSON.stringify(license));
-
-    // Lancer l'app
-    startApp(license);
-
-  } catch (error) {
-    err.textContent = error.message;
-    err.style.display = "block";
-  }
+  return null;
 }
 
+function doLogin() {
+  var user = (document.getElementById('l-user').value || '').trim();
+  var pwd  = (document.getElementById('l-pwd').value  || '').trim();
+  var err  = document.getElementById('lerr');
+  var btn  = document.querySelector('.lbtn');
+  err.style.display = 'none';
+
+  if (!user || !pwd) {
+    err.textContent = 'Veuillez remplir tous les champs.';
+    err.style.display = 'block'; return;
+  }
+
+  // Essai 1 : licences déjà en mémoire
+  var lic = findLic(user, pwd);
+  if (lic) {
+    lsSet('tp_sess', JSON.stringify({user:lic.user, ts:Date.now()}));
+    startApp(lic); return;
+  }
+
+  // Essai 2 : recharger licences.json depuis le serveur (contourne le cache)
+  if (btn) btn.textContent = 'Connexion...';
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', 'licences.json?t=' + Date.now(), true);
+  xhr.onload = function() {
+    if (btn) btn.textContent = 'Accéder à mon journal';
+    if (xhr.status === 200) {
+      try {
+        var d = JSON.parse(xhr.responseText);
+        if (Array.isArray(d) && d.length > 0) LICENSES = d;
+      } catch(e) {}
+    }
+    var lic2 = findLic(user, pwd);
+    if (lic2) {
+      lsSet('tp_sess', JSON.stringify({user:lic2.user, ts:Date.now()}));
+      startApp(lic2);
+    } else {
+      err.textContent = 'Identifiants incorrects. Vérifiez votre nom et mot de passe.';
+      err.style.display = 'block';
+    }
+  };
+  xhr.onerror = function() {
+    if (btn) btn.textContent = 'Accéder à mon journal';
+    err.textContent = 'Erreur réseau. Vérifiez votre connexion internet.';
+    err.style.display = 'block';
+  };
+  xhr.send();
+}
 function doLogout() {
   closeProf();
   lsDel('tp_sess');
